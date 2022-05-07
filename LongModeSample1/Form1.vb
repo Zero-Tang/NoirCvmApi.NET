@@ -3,12 +3,17 @@ Imports System.IO
 Imports System.Runtime.InteropServices
 Imports System.Threading
 Public Class Form1
+    Private Enum DebugCommandType As Integer
+        ContinueExecution = 0
+        SingleStepExecution = 1
+    End Enum
     Private Const StdInPort As Integer = 0
     Private Const StdOutPort As Integer = 1
     Private Const StdErrPort As Integer = 2
     Private Const StdIoCtrlPort As Integer = 3
     Private Const StdIoIntVPort As Integer = 4
     Private Const PowerMgmtPort As Integer = 5
+    Private Const StdIoColorPort As Integer = 6
     Private Const PageBaseMask As Long = &HFFFFFFFFF000
     Private Const PageBaseMask2MB As Long = &HFFFFFFE00000
     Private Const PageBaseMask1GB As Long = &HFFFFC0000000
@@ -24,9 +29,94 @@ Public Class Form1
     Dim VM As VirtualMachine
     Dim VP As VirtualProcessor
     Dim VpThread As Thread
+    Dim VmGfx As Graphics
+    Dim BmpGfx As Bitmap, TxtGfx As Bitmap
+    Dim DisplayFont As New Font("Consolas", 10)
+    Dim CurPt As New Point(0, 0)
+    Dim ConsolePalette(15) As Color
+    Dim BGColor As Color = Color.Black, FGColor As Color = Color.LightGray
+    Dim ColorCmd As Byte = &H7
+    Dim StdIoCtrl As Byte = 0
+    Dim StdInChar As Byte = 0
+    Dim StdIoIntVector As Byte = &H20
+    Dim DebugCommand As DebugCommandType
+
+    Private Sub InitializeConsolePalette()
+        ConsolePalette(0) = Color.Black
+        ConsolePalette(1) = Color.Blue
+        ConsolePalette(2) = Color.Green
+        ConsolePalette(3) = Color.Cyan
+        ConsolePalette(4) = Color.Red
+        ConsolePalette(5) = Color.Magenta
+        ConsolePalette(6) = Color.Brown
+        ConsolePalette(7) = Color.LightGray
+        ConsolePalette(8) = Color.DarkGray
+        ConsolePalette(9) = Color.LightBlue
+        ConsolePalette(10) = Color.LightGreen
+        ConsolePalette(11) = Color.LightCyan
+        ConsolePalette(12) = Color.LightCoral
+        ConsolePalette(13) = Color.Violet
+        ConsolePalette(14) = Color.Yellow
+        ConsolePalette(15) = Color.White
+    End Sub
+
+    Private Sub StatusLabelUpdate(ByVal Text As String)
+        If StatusStrip1.InvokeRequired Then
+            Dim d As Action(Of String) = AddressOf StatusLabelUpdate
+            StatusStrip1.BeginInvoke(d, Text)
+        Else
+            ToolStripStatusLabel1.Text = Text
+            StatusStrip1.Update()
+        End If
+    End Sub
+
+    Private Sub DebugMenuUpdate(ByVal Enable As Boolean)
+        If MenuStrip1.InvokeRequired Then
+            Dim d As Action(Of Boolean) = AddressOf DebugMenuUpdate
+            MenuStrip1.BeginInvoke(d, Enable)
+        Else
+            ToolStripMenuItem11.Enabled = Enable
+            ToolStripMenuItem12.Enabled = Enable
+            MenuStrip1.Update()
+        End If
+    End Sub
 
     Private Function ExceptionCallback(ByRef Context As ExceptionExitContext) As Boolean
-        MsgBox("Exception occured! Vector:" & Str(Context.Vector), vbExclamation)
+        Context.VirtualProcessor.PullGeneralPurposeRegisters()
+        Select Case Context.Vector
+            Case ExceptionExitContext.ExceptionVector.BreakpointTrap
+                StatusLabelUpdate(String.Format("Breakpoint trapped at 0x{0}!", Hex(Context.Rip)))
+                Try
+                    ' Enter sleep state to wait for debug command.
+                    DebugMenuUpdate(True)
+                    Thread.Sleep(Timeout.Infinite)
+                Catch Ex As ThreadInterruptedException
+                    ' Debug command has arrived.
+                    DebugMenuUpdate(False)
+                    If DebugCommand = DebugCommandType.SingleStepExecution Then Context.VirtualProcessor.Rflags = Context.Rflags Or &H100
+                    Context.AdvanceRip()
+                End Try
+                Return True
+            Case ExceptionExitContext.ExceptionVector.DebugTrapFault
+                Context.VirtualProcessor.PullDebugRegisters()
+                If Context.VirtualProcessor.Dr6 And &H4000 Then
+                    StatusLabelUpdate(String.Format("Single-Step trapped at 0x{0}!", Hex(Context.Rip)))
+                    Try
+                        ' Enter sleep state to wait for debug command.
+                        DebugMenuUpdate(True)
+                        Thread.Sleep(Timeout.Infinite)
+                    Catch Ex As ThreadInterruptedException
+                        ' Debug command has arrived.
+                        DebugMenuUpdate(False)
+                        If DebugCommand = DebugCommandType.ContinueExecution Then Context.VirtualProcessor.Rflags = Context.Rflags And &HFFFFFFFFFFFFFEFF
+                    End Try
+                Else
+                    MsgBox("Unexpected #DB exception! rip=0x" & Hex(Context.Rip), vbExclamation)
+                End If
+                Return True
+            Case Else
+                MsgBox(String.Format("Exception Vector: {0}, rsp=0x{1}, rip=0x{2}, RAM Base=0x{3}", Context.Vector, Hex(Context.VirtualProcessor.Rsp), Hex(Context.Rip), Hex(MainRam.ToInt64())), vbExclamation)
+        End Select
         Return False
     End Function
 
@@ -81,25 +171,112 @@ Public Class Form1
         Return (PtEntry And PageBaseMask) Or (GVA And PageOffsetMask)
     End Function
 
+    Private Sub UpdateImageRoutine(ByVal NewImage As Image)
+        If Me.PictureBox1.InvokeRequired Then
+            Dim d As Action(Of Image) = AddressOf UpdateImageRoutine
+            PictureBox1.BeginInvoke(d, NewImage)
+        Else
+            PictureBox1.Image = NewImage
+            PictureBox1.Update()
+        End If
+    End Sub
+
+    Private Function RescissionCallback(ByRef Context As ExitContext) As Boolean
+        ' Usually, rescission occurs when an interrupt condition occurs.
+        If StdIoCtrl And &H8 Then Context.VirtualProcessor.InjectEvent(True, StdIoIntVector, VirtualProcessor.EventType.ExternalInterrupt, 1, False, 0)
+        Return True
+    End Function
+
+    Private Function HaltCallback(ByRef Context As ExitContext) As Boolean
+        Try
+            If (Context.Rflags And &H200) = 0 Then MsgBox("Interrupt was disabled! This vCPU will be permanently sleeping!", vbExclamation)
+            Thread.Sleep(Timeout.Infinite)
+        Catch Ex As ThreadAbortException
+            ' User specifies to terminate this VM.
+            Return False
+        Catch Ex As ThreadInterruptedException
+            ' Received an interrupt.
+            If StdIoCtrl And &H8 Then Context.VirtualProcessor.InjectEvent(True, StdIoIntVector, VirtualProcessor.EventType.ExternalInterrupt, 1, False, 0)
+        End Try
+        Context.AdvanceRip()
+        Return True
+    End Function
+
     Private Function IoCallback(ByRef Context As IoExitContext) As Boolean
         Select Case Context.Port
+            Case StdInPort
+                If Context.InputInstruction Then
+                    If Not Context.StringInstruction And Not Context.RepeatInstruction Then
+                        Dim KeyByte As Byte = Thread.VolatileRead(StdInChar)
+                        Context.VirtualProcessor.PullGeneralPurposeRegisters()
+                        Context.VirtualProcessor.Rax = (Context.VirtualProcessor.Rax And &HFFFFFFFFFFFFFF00) Or KeyByte
+                        Context.VirtualProcessor.SynchronizeTo()
+                    End If
+                End If
             Case StdOutPort
-                If Context.StringInstruction Then
+                If Context.StringInstruction And Not Context.InputInstruction Then
                     Dim FaultCode As Integer
                     Dim GPA As Long = TranslateGva(Context.VirtualProcessor.Cr3, Context.Rsi, True, False, False, Context.CPL = 3, FaultCode)
-                    If FaultCode Then MsgBox("#PF occurs in this I/O! Error Code=0x" & Hex(FaultCode), vbExclamation)
+                    If FaultCode Then
+                        MsgBox("#PF occurs in this I/O! Error Code=0x" & Hex(FaultCode), vbExclamation)
+                        Context.VirtualProcessor.InjectEvent(True, &HE, VirtualProcessor.EventType.FaultTrapException, 0, True, FaultCode)
+                    End If
                     If Context.RepeatInstruction Then
                         ' FIXME: Cross-page read.
                         Dim OutputString As String = Marshal.PtrToStringAnsi(MainRam + GPA, CInt(Context.Rcx))
-                        MsgBox("Message sent to stdout by guest:" & vbCrLf & OutputString, vbInformation)
+                        Dim OutputSize As Size = TextRenderer.MeasureText(OutputString, DisplayFont, TxtGfx.Size, TextFormatFlags.Left)
+                        TextRenderer.DrawText(VmGfx, OutputString, DisplayFont, CurPt, FGColor, BGColor, TextFormatFlags.Left)
+                        UpdateImageRoutine(TxtGfx)
+                        CurPt.Y += OutputSize.Height
                     End If
+                End If
+            Case StdIoCtrlPort
+                If Context.InputInstruction Then
+                    If Not Context.StringInstruction And Not Context.RepeatInstruction Then
+                        Context.VirtualProcessor.PullGeneralPurposeRegisters()
+                        Context.VirtualProcessor.Rax = (Context.VirtualProcessor.Rax And &HFFFFFFFFFFFFFF00) Or StdIoCtrl
+                    End If
+                Else
+                    ' Mask Non-R/W bits.
+                    Dim Data As Byte
+                    If Not Context.StringInstruction And Not Context.RepeatInstruction Then Data = Context.Rax And &HB
+                    StdIoCtrl = Data
+                    ' Check if guest wants to clear the console.
+                    If Context.Rax And &H10 Then
+                        TxtGfx.Dispose()
+                        TxtGfx = New Bitmap(Me.PictureBox1.Width, Me.PictureBox1.Height)
+                    End If
+                End If
+            Case StdIoIntVPort
+                If Context.InputInstruction Then
+                    If Not Context.StringInstruction And Not Context.RepeatInstruction Then
+                        Context.VirtualProcessor.PullGeneralPurposeRegisters()
+                        Context.VirtualProcessor.Rax = (Context.VirtualProcessor.Rax And &HFFFFFFFFFFFFFF00) Or StdIoIntVector
+                    End If
+                Else
+                    If Not Context.StringInstruction And Not Context.RepeatInstruction Then StdIoIntVector = CByte(Context.Rax And &HFF)
                 End If
             Case PowerMgmtPort
                 If Not Context.RepeatInstruction And Not Context.StringInstruction Then
-                    Dim Command As Byte = CByte(Context.Rax)
-                    If Command And &H1 Then
-                        MsgBox("Guest issued a shutdown command!", vbInformation)
-                        Return False
+                    If Context.InputInstruction Then
+                    Else
+                        Dim Command As Byte = CByte(Context.Rax And &HFF)
+                        If Command And &H1 Then
+                            MsgBox("Guest issued a shutdown command!", vbInformation)
+                            Return False
+                        End If
+                    End If
+                End If
+            Case StdIoColorPort
+                If Not Context.RepeatInstruction And Not Context.StringInstruction Then
+                    If Context.InputInstruction Then
+                        ' Refresh GPRs before you write them!
+                        Context.VirtualProcessor.PullGeneralPurposeRegisters()
+                        Context.VirtualProcessor.Rax = (Context.VirtualProcessor.Rax And &HFFFFFFFFFFFFFF00) Or ColorCmd
+                    Else
+                        ColorCmd = CByte(Context.Rax And &HFF)
+                        FGColor = ConsolePalette(ColorCmd And &HF)
+                        BGColor = ConsolePalette(ColorCmd >> 4)
                     End If
                 End If
             Case Else
@@ -109,6 +286,17 @@ Public Class Form1
         Context.AdvanceRip()
         Return True
     End Function
+
+    Private Sub VpWorkerThread()
+        Try
+            VP.Run()
+        Catch Ex As ThreadAbortException
+
+        End Try
+        SwitchMenuState(True)
+        VP.Dispose()
+        VM.Dispose()
+    End Sub
 
     Private Sub InitializeVpState()
         ' General Purpose Registers
@@ -181,12 +369,11 @@ Public Class Form1
         ' Interception callbacks...
         VP.ExceptionHandler = AddressOf ExceptionCallback
         VP.IoHandler = AddressOf IoCallback
+        VP.HaltHandler = AddressOf HaltCallback
+        VP.RescissionHandler = AddressOf RescissionCallback
         ' Synchronize to the vCPU scheduler.
         VP.SynchronizeTo()
         VP.PushExtendedState()
-        VP.Run()
-        VP.Dispose()
-        VM.Dispose()
     End Sub
 
     Private Sub StartGuest()
@@ -213,15 +400,47 @@ Public Class Form1
         VP = New VirtualProcessor(VM, 0)
         VM.SetAddressMapping(0, MainRam, 2048)
         InitializeVpState()
+        ' Change the state of the UI
+        ToolStripMenuItem7.Enabled = False
+        ToolStripMenuItem8.Enabled = True
+        ToolStripMenuItem9.Enabled = True
+        ' Start a thread to run vCPU.
+        VpThread = New Thread(AddressOf VpWorkerThread)
+        VpThread.Start()
+    End Sub
 
+    Private Sub SwitchMenuState(ByVal Enable As Boolean)
+        If MenuStrip1.InvokeRequired Then
+            Dim d As Action(Of Boolean) = AddressOf SwitchMenuState
+            Me.MenuStrip1.BeginInvoke(d, Enable)
+        Else
+            ToolStripMenuItem7.Enabled = Enable
+            ToolStripMenuItem8.Enabled = Not Enable
+            ToolStripMenuItem9.Enabled = Not Enable
+            MenuStrip1.Update()
+        End If
     End Sub
 
     Private Sub Form1_FormClosing(ByVal sender As Object, ByVal e As System.Windows.Forms.FormClosingEventArgs) Handles Me.FormClosing
         Miscellaneous.FinalizeLibrary()
     End Sub
 
+    Private Sub Form1_KeyPress(ByVal sender As Object, ByVal e As System.Windows.Forms.KeyPressEventArgs) Handles Me.KeyPress
+        Thread.VolatileWrite(StdInChar, CByte(Asc(e.KeyChar) And &HFF))
+        StdIoCtrl = StdIoCtrl Or &H1
+        If VpThread.ThreadState = ThreadState.WaitSleepJoin Then
+            VpThread.Interrupt()
+        ElseIf VpThread.ThreadState = ThreadState.Running Then
+            VP.Rescind()
+        End If
+    End Sub
+
     Private Sub Form1_Load(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles MyBase.Load
         Miscellaneous.InitializeLibrary()
+        TxtGfx = New Bitmap(PictureBox1.Width, PictureBox1.Height)
+        VmGfx = Graphics.FromImage(TxtGfx)
+        InitializeConsolePalette()
+        PictureBox1.Image = TxtGfx
     End Sub
 
     Private Sub ToolStripMenuItem2_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles ToolStripMenuItem2.Click
@@ -253,6 +472,25 @@ Public Class Form1
     End Sub
 
     Private Sub ToolStripMenuItem7_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles ToolStripMenuItem7.Click
+        ColorCmd = &H7
+        BGColor = Color.Black
+        FGColor = Color.LightGray
         StartGuest()
+    End Sub
+
+    Private Sub ToolStripMenuItem8_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles ToolStripMenuItem8.Click
+        VpThread.Abort()
+    End Sub
+
+    Private Sub ToolStripMenuItem11_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles ToolStripMenuItem11.Click
+        DebugCommand = DebugCommandType.ContinueExecution
+        VpThread.Interrupt()
+        ToolStripStatusLabel1.Text = ""
+    End Sub
+
+    Private Sub ToolStripMenuItem12_Click(ByVal sender As System.Object, ByVal e As System.EventArgs) Handles ToolStripMenuItem12.Click
+        DebugCommand = DebugCommandType.SingleStepExecution
+        VpThread.Interrupt()
+        ToolStripStatusLabel1.Text = ""
     End Sub
 End Class

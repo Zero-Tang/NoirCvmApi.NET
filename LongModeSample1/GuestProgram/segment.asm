@@ -9,7 +9,9 @@ dq 0x00209b0000000000
 ; 0x18 is kernel data selector
 dq 0x00cf93000000ffff
 ; 0x20 is task register selector
-dq 0x00008b0002000067,0x00000000fffff800
+dw 0x0067,0x0200
+db 0x00,0x8b,0x00,0x00
+dd 0xfffff800,0x00000000
 times 512-($-$$) db 0
 tss_base:
 ; Reserved

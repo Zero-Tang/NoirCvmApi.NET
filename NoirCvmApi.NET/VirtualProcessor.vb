@@ -46,6 +46,12 @@ Public Class VirtualProcessor
         InterruptWindow = 14
         TaskSwitch = 15
     End Enum
+    Public Enum EventType
+        ExternalInterrupt = 0
+        NonMaskableInterrupt = 2
+        FaultTrapException = 3
+        SoftwareInterrupt = 4
+    End Enum
     Private IOCTL_CvmCreateVcpu As Integer = CTL_CODE_GEN(&H890)
     Private IOCTL_CvmDeleteVcpu As Integer = CTL_CODE_GEN(&H891)
     Private IOCTL_CvmRunVcpu As Integer = CTL_CODE_GEN(&H892)
@@ -335,7 +341,6 @@ Public Class VirtualProcessor
     Public Property Rax As Long
         ' The rax register is not a synchronizing property.
         Get
-
             Return GprState.Rax
         End Get
         Set(ByVal value As Long)
@@ -1250,30 +1255,10 @@ Public Class VirtualProcessor
     End Property
 
     Public Sub SynchronizeFrom()
-        SendViewRequest(NoirCvmRegisterType.NoirCvmGeneralPurposeRegister, &H80)
-        GprState = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(GeneralPurposeRegisterSet)), GeneralPurposeRegisterSet)
-        GprValid = True
-        SendViewRequest(NoirCvmRegisterType.NoirCvmControlRegister, &H18)
-        CrState = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(ControlRegisterSet)), ControlRegisterSet)
-        CrValid = True
-        SendViewRequest(NoirCvmRegisterType.NoirCvmDebugRegister, &H20)
-        DrState1 = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(DebugRegisterSet1)), DebugRegisterSet1)
-        DrValid1 = True
-        SendViewRequest(NoirCvmRegisterType.NoirCvmDr67Register, &H10)
-        DrState2 = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(DebugRegisterSet2)), DebugRegisterSet2)
-        DrValid2 = True
-        SendViewRequest(NoirCvmRegisterType.NoirCvmSegmentRegister, &H40)
-        SrState = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(SegmentRegisterSet)), SegmentRegisterSet)
-        SrValid = True
-        SendViewRequest(NoirCvmRegisterType.NoirCvmFsGsRegister, &H28)
-        FgState = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(SegmentRegisterSet2)), SegmentRegisterSet2)
-        FgValid = True
-        SendViewRequest(NoirCvmRegisterType.NoirCvmTrLdtrRegister, &H20)
-        LtState = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(SegmentRegisterSet3)), SegmentRegisterSet3)
-        LtValid = True
-        SendViewRequest(NoirCvmRegisterType.NoirCvmDescriptorTable, &H20)
-        DtState = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(SegmentRegisterSet4)), SegmentRegisterSet4)
-        DtValid = True
+        PullGeneralPurposeRegisters()
+        PullControlRegisters()
+        PullDebugRegisters()
+        PullSegmentRegisters()
     End Sub
 
     Public Sub SynchronizeTo()
@@ -1332,6 +1317,42 @@ Public Class VirtualProcessor
         End If
     End Sub
 
+    Public Sub PullGeneralPurposeRegisters()
+        SendViewRequest(NoirCvmRegisterType.NoirCvmGeneralPurposeRegister, &H80)
+        GprState = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(GeneralPurposeRegisterSet)), GeneralPurposeRegisterSet)
+        GprValid = True
+    End Sub
+
+    Public Sub PullSegmentRegisters()
+        SendViewRequest(NoirCvmRegisterType.NoirCvmSegmentRegister, &H40)
+        SrState = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(SegmentRegisterSet)), SegmentRegisterSet)
+        SrValid = True
+        SendViewRequest(NoirCvmRegisterType.NoirCvmFsGsRegister, &H28)
+        FgState = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(SegmentRegisterSet2)), SegmentRegisterSet2)
+        FgValid = True
+        SendViewRequest(NoirCvmRegisterType.NoirCvmTrLdtrRegister, &H20)
+        LtState = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(SegmentRegisterSet3)), SegmentRegisterSet3)
+        LtValid = True
+        SendViewRequest(NoirCvmRegisterType.NoirCvmDescriptorTable, &H20)
+        DtState = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(SegmentRegisterSet4)), SegmentRegisterSet4)
+        DtValid = True
+    End Sub
+
+    Public Sub PullControlRegisters()
+        SendViewRequest(NoirCvmRegisterType.NoirCvmControlRegister, &H18)
+        CrState = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(ControlRegisterSet)), ControlRegisterSet)
+        CrValid = True
+    End Sub
+
+    Public Sub PullDebugRegisters()
+        SendViewRequest(NoirCvmRegisterType.NoirCvmDebugRegister, &H20)
+        DrState1 = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(DebugRegisterSet1)), DebugRegisterSet1)
+        DrValid1 = True
+        SendViewRequest(NoirCvmRegisterType.NoirCvmDr67Register, &H10)
+        DrState2 = CType(Marshal.PtrToStructure(RegisterBuffer + 24, GetType(DebugRegisterSet2)), DebugRegisterSet2)
+        DrValid2 = True
+    End Sub
+
     Public Sub PullExtendedState()
         Dim ReturnedLength As Integer
         Dim Result As Boolean = DeviceIoControl(NvDriverHandle, IOCTL_CvmViewVcpuReg, ExtendedState - 16, 16, ExtendedState - 8, &H1008, ReturnedLength, IntPtr.Zero)
@@ -1375,6 +1396,38 @@ Public Class VirtualProcessor
             NoirThrowByStatus(Status)
         Else
             Throw New NoirVisorCommunicationException("Failed to edit register! Win32 Error Code:" & Str(Err.LastDllError))
+        End If
+    End Sub
+
+    Public Sub InjectEvent(ByVal Valid As Boolean, ByVal Vector As Byte, ByVal Type As EventType, ByVal Priority As Byte, ByVal ErrorCodeValid As Boolean, ByVal ErrorCode As Integer)
+        Dim InBuff(2) As Long
+        InBuff(0) = VirtualMachine.VmHandle
+        InBuff(1) = CLng(VirtualProcessorIndex)
+        InBuff(2) = CLng(Vector) And &HFF
+        InBuff(2) = InBuff(2) Or CLng((Type And &H7) << 8)
+        InBuff(2) = InBuff(2) Or (CLng(ErrorCodeValid) << 11)
+        InBuff(2) = InBuff(2) Or CLng((Priority And &HF) << 27)
+        InBuff(2) = InBuff(2) Or (CLng(Valid) << 31)
+        InBuff(2) = InBuff(2) Or (CLng(ErrorCode) << 32)
+        Dim Status As Integer, ReturnedLength As Integer
+        Dim Result As Boolean = DeviceIoControl(NvDriverHandle, IOCTL_CvmInjectEvent, InBuff(0), 24, Status, 4, ReturnedLength, IntPtr.Zero)
+        If Result Then
+            NoirThrowByStatus(Status)
+        Else
+            Throw New NoirVisorCommunicationException("Failed to inject event! Win32 Error Code:" & Str(Err.LastDllError))
+        End If
+    End Sub
+
+    Public Sub Rescind()
+        Dim InBuff(1) As Long
+        InBuff(0) = VirtualMachine.VmHandle
+        InBuff(1) = CLng(VirtualProcessorIndex)
+        Dim ReturnedLength As Integer, Status As Integer
+        Dim Result As Boolean = DeviceIoControl(NvDriverHandle, IOCTL_CvmRescindVcpu, InBuff(0), 16, Status, 4, ReturnedLength, IntPtr.Zero)
+        If Result Then
+            NoirThrowByStatus(Status)
+        Else
+            Throw New NoirVisorCommunicationException("Failed to rescind vCPU! Win32 Error Code:" & Str(Err.LastDllError))
         End If
     End Sub
 

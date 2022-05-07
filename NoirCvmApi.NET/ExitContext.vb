@@ -159,20 +159,39 @@ End Class
 
 Public NotInheritable Class ExceptionExitContext
     Inherits ExitContext
-    Public ReadOnly Vector As Byte
+    Public ReadOnly Vector As ExceptionVector
     Public ReadOnly ErrorCodeValid As Boolean
     Public ReadOnly ErrorCode As Integer
     Public ReadOnly PageFaultAddress As Long
     Private Const Offset_BasicInfo As Integer = &H8
     Private Const Offset_ErrorCode As Integer = &HC
     Private Const Offset_PageFaultAddress As Integer = &H10
-    Private Const PageFaultVector As Byte = 14
+    Public Enum ExceptionVector
+        DivideErrorFault = 0
+        DebugTrapFault = 1
+        BreakpointTrap = 3
+        OverflowTrap = 4
+        BoundRangeFault = 5
+        InvalidOpcodeFault = 6
+        DeviceNotAvailableFault = 7
+        DoubleFaultAbort = 8
+        InvalidTssFault = 10
+        SegmentNptPresentFault = 11
+        StackFault = 12
+        GeneralProtectionFault = 13
+        PageFault = 14
+        FloatingPointExceptionPendingFault = 16
+        AlignmentCheckFault = 17
+        MachineCheckAbort = 18
+        SimdFloatingPointFault = 19
+        ControlProtectionFault = 21
+    End Enum
     Public Sub New(ByVal VP As VirtualProcessor, ByVal ExitContextBuffer As IntPtr)
         MyBase.New(VP, ExitContextBuffer)
         Dim BasicInfo As Integer = Marshal.ReadInt32(ExitContextBuffer, Offset_BasicInfo)
-        Vector = CByte(BasicInfo And &H1F)
+        Vector = CType(BasicInfo And &H1F, ExceptionVector)
         ErrorCodeValid = CBool((BasicInfo And &H20) = &H20)
         If ErrorCodeValid Then ErrorCode = Marshal.ReadInt32(ExitContextBuffer, Offset_ErrorCode)
-        If Vector = PageFaultVector Then PageFaultAddress = Marshal.ReadInt64(ExitContextBuffer, Offset_PageFaultAddress)
+        If Vector = ExceptionVector.PageFault Then PageFaultAddress = Marshal.ReadInt64(ExitContextBuffer, Offset_PageFaultAddress)
     End Sub
 End Class
