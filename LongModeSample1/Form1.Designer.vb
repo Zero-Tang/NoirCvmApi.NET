@@ -97,6 +97,7 @@ Partial Class Form1
         '
         'ToolStripMenuItem5
         '
+        Me.ToolStripMenuItem5.Enabled = False
         Me.ToolStripMenuItem5.Name = "ToolStripMenuItem5"
         Me.ToolStripMenuItem5.Size = New System.Drawing.Size(201, 22)
         Me.ToolStripMenuItem5.Text = "Open SMRAM File"

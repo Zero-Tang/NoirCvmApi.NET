@@ -361,8 +361,8 @@ Public Class Form1
         VP.Cr8 = 0
         VP.Xcr0 = 1
         ' Extended State
-        Marshal.WriteInt16(VP.ExtendedState, VirtualProcessor.FcwOffset, &H40)
-        Marshal.WriteInt16(VP.ExtendedState, VirtualProcessor.MxCsrOffset, &H1F80)
+        Marshal.WriteInt16(VP.ExtendedState, VirtualProcessor.ExtendedStateOffset.Fcw, &H40)
+        Marshal.WriteInt16(VP.ExtendedState, VirtualProcessor.ExtendedStateOffset.MxCsr, &H1F80)
         ' vCPU Options
         VP.ExceptionBitmap = &HFFFFFFFF
         VP.InterceptExceptions = True

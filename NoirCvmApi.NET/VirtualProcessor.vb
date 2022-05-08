@@ -113,7 +113,7 @@ Public Class VirtualProcessor
         Dim LastExceptionFromIp As Long
         Dim LastExceptionToIp As Long
     End Structure
-    <StructLayout(LayoutKind.Explicit)> Public Structure SegmentRegister
+    <StructLayout(LayoutKind.Explicit)> Private Structure SegmentRegister
         <FieldOffset(0)> Dim Selector As Short
         <FieldOffset(2)> Dim Attributes As Short
         <FieldOffset(4)> Dim Limit As Integer
@@ -138,108 +138,6 @@ Public Class VirtualProcessor
         <FieldOffset(0)> Dim Gdtr As SegmentRegister
         <FieldOffset(&H10)> Dim Idtr As SegmentRegister
     End Structure
-    <StructLayout(LayoutKind.Explicit)> Public Structure XmmRegister
-        <FieldOffset(&H0)> Dim f1 As Single
-        <FieldOffset(&H4)> Dim f2 As Single
-        <FieldOffset(&H8)> Dim f3 As Single
-        <FieldOffset(&HC)> Dim f4 As Single
-        <FieldOffset(&H0)> Dim d1 As Double
-        <FieldOffset(&H8)> Dim d2 As Double
-    End Structure
-    Public Structure XmmRegisterSet
-        Dim Xmm0 As XmmRegister
-        Dim Xmm1 As XmmRegister
-        Dim Xmm2 As XmmRegister
-        Dim Xmm3 As XmmRegister
-        Dim Xmm4 As XmmRegister
-        Dim Xmm5 As XmmRegister
-        Dim Xmm6 As XmmRegister
-        Dim Xmm7 As XmmRegister
-        Dim Xmm8 As XmmRegister
-        Dim Xmm9 As XmmRegister
-        Dim Xmm10 As XmmRegister
-        Dim Xmm11 As XmmRegister
-        Dim Xmm12 As XmmRegister
-        Dim Xmm13 As XmmRegister
-        Dim Xmm14 As XmmRegister
-        Dim Xmm15 As XmmRegister
-    End Structure
-    Public Structure FxState
-        Dim Fcw As Short
-        Dim Fsw As Short
-        Dim Ftw As Byte
-        Dim Reserved0 As Byte
-        Dim Fop As Short
-        Dim Fip As Integer
-        Dim Fcs As Short
-        Dim Reserved1 As Short
-        Dim Fdp As Long
-        Dim MxCsr As Integer
-        Dim MxCsrMask As Integer
-        Dim Mm0 As Long
-        Dim Reserved_0 As Long
-        Dim Mm1 As Long
-        Dim Reserved_1 As Long
-        Dim Mm2 As Long
-        Dim Reserved_2 As Long
-        Dim Mm3 As Long
-        Dim Reserved_3 As Long
-        Dim Mm4 As Long
-        Dim Reserved_4 As Long
-        Dim Mm5 As Long
-        Dim Reserved_5 As Long
-        Dim Mm6 As Long
-        Dim Reserved_6 As Long
-        Dim Mm7 As Long
-        Dim Reserved_7 As Long
-        Dim Sse As XmmRegisterSet
-        Dim Reserved2 As Long
-        Dim Reserved3 As Long
-        Dim Reserved4 As Long
-        Dim Reserved5 As Long
-        Dim Reserved6 As Long
-        Dim Reserved7 As Long
-        Dim Available0 As Long
-        Dim Available1 As Long
-        Dim Available2 As Long
-        Dim Available3 As Long
-        Dim Available4 As Long
-        Dim Available5 As Long
-    End Structure
-
-    Private Structure NoirCvmIoContext
-        Dim Access As Short
-        Dim Port As Short
-        Dim Rax As Long
-        Dim Rcx As Long
-        Dim Rsi As Long
-        Dim Rdi As Long
-        Dim Ds As SegmentRegister
-        Dim Es As SegmentRegister
-    End Structure
-
-    Private Structure NoirCvmCpuidContext
-        Dim Eax As Integer
-        Dim Ecx As Integer
-    End Structure
-
-    Private Structure NoirCvmMsrContext
-        Dim Eax As Integer
-        Dim Edx As Integer
-        Dim Ecx As Integer
-    End Structure
-
-    <StructLayout(LayoutKind.Explicit)> Private Structure NoirCvmMemoryAccessContext
-        <FieldOffset(0)> Dim Access As Byte
-        <FieldOffset(1)> Dim InstructionBytes As Byte
-        <FieldOffset(16)> Dim GPA As Long
-    End Structure
-
-    Private Const NoirCvmIoAccessInput As Short = &H1
-    Private Const NoirCvmIoAccessString As Short = &H2
-    Private Const NoirCvmIoAccessRepeat As Short = &H4
-    Private Const NoirCvmIoAccessOperandSizeShift As Short = 3
-    Private Const NoirCvmIoAccessAddressWidthShift As Short = 6
 
     Private GprState As GeneralPurposeRegisterSet
     Private GprValid As Boolean = False
@@ -262,38 +160,40 @@ Public Class VirtualProcessor
     Private SeState As SysEnterRegisterSet
     Private SeValid As Boolean = False
 
-    Public Const FcwOffset As Integer = &H0UI
-    Public Const FswOffset As Integer = &H2UI
-    Public Const FtwOffset As Integer = &H4UI
-    Public Const FopOffset As Integer = &H6UI
-    Public Const FipOffset As Integer = &H8UI
-    Public Const FdpOffset As Integer = &H10UI
-    Public Const MxCsrOffset As Integer = &H18UI
-    Public Const MxCsrMaskOffset As Integer = &H1CUI
-    Public Const St0Offset As Integer = &H20UI
-    Public Const St1Offset As Integer = &H30UI
-    Public Const St2Offset As Integer = &H40UI
-    Public Const St3Offset As Integer = &H50UI
-    Public Const St4Offset As Integer = &H60UI
-    Public Const St5Offset As Integer = &H70UI
-    Public Const St6Offset As Integer = &H80UI
-    Public Const St7Offset As Integer = &H90UI
-    Public Const Xmm0Offset As Integer = &HA0UI
-    Public Const Xmm1Offset As Integer = &HB0UI
-    Public Const Xmm2Offset As Integer = &HC0UI
-    Public Const Xmm3Offset As Integer = &HD0UI
-    Public Const Xmm4Offset As Integer = &HE0UI
-    Public Const Xmm5Offset As Integer = &HF0UI
-    Public Const Xmm6Offset As Integer = &H100UI
-    Public Const Xmm7Offset As Integer = &H110UI
-    Public Const Xmm8Offset As Integer = &H120UI
-    Public Const Xmm9Offset As Integer = &H130UI
-    Public Const Xmm10Offset As Integer = &H140UI
-    Public Const Xmm11Offset As Integer = &H150UI
-    Public Const Xmm12Offset As Integer = &H160UI
-    Public Const Xmm13Offset As Integer = &H170UI
-    Public Const Xmm14Offset As Integer = &H180UI
-    Public Const Xmm15Offset As Integer = &H190UI
+    Public Enum ExtendedStateOffset As Integer
+        Fcw = &H0I
+        Fsw = &H2I
+        Ftw = &H4I
+        Fop = &H6I
+        Fip = &H8I
+        Fdp = &H10I
+        MxCsr = &H18I
+        MxCsrMask = &H1CI
+        St0 = &H20I
+        St1 = &H30I
+        St2 = &H40I
+        St3 = &H50I
+        St4 = &H60I
+        St5 = &H70I
+        St6 = &H80I
+        St7 = &H90I
+        Xmm0 = &HA0I
+        Xmm1 = &HB0I
+        Xmm2 = &HC0I
+        Xmm3 = &HD0I
+        Xmm4 = &HE0I
+        Xmm5 = &HF0I
+        Xmm6 = &H100I
+        Xmm7 = &H110I
+        Xmm8 = &H120I
+        Xmm9 = &H130I
+        Xmm10 = &H140I
+        Xmm11 = &H150I
+        Xmm12 = &H160I
+        Xmm13 = &H170I
+        Xmm14 = &H180I
+        Xmm15 = &H190I
+    End Enum
 
     Private Const NoirCvmExitContextOffset As Integer = &H8
     Private Const NoirCvmExitContextSize As Integer = &H78
@@ -1236,7 +1136,7 @@ Public Class VirtualProcessor
 
     Public Property ExceptionBitmap As Integer
         Get
-            Return ExceptionInterceptmap
+            Return ExceptionInterceptMap
         End Get
         Set(ByVal value As Integer)
             ExceptionInterceptMap = value
